@@ -15,6 +15,7 @@ import com.twitter.io.{Buf, Reader, Writer}
 import com.twitter.util.{Await, Closable, Future, JavaTimer, Promise, Return, Throw, Time}
 import java.io.{PrintWriter, StringWriter}
 import java.net.{InetAddress, InetSocketAddress}
+import org.jboss.netty.buffer.ChannelBuffers
 import org.junit.runner.RunWith
 import org.scalatest.{BeforeAndAfter, FunSuite}
 import org.scalatest.junit.JUnitRunner
@@ -735,6 +736,72 @@ class EndToEndTest extends FunSuite with BeforeAndAfter {
     }
     intercept[IllegalArgumentException] {
       com.twitter.finagle.Http.client.withMaxResponseSize(3000.megabytes)
+    }
+  }
+
+  test("message content MUST NOT be sent if status code is 1XX, 204 or 304") {
+    import Status.{Continue, SwitchingProtocols, Processing, NoContent, NotModified}
+
+    def checkWith(status: Status) = {
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .serve("localhost:*", statusCodeSvc)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+
+      val rep = Await.result(client(requestWith(status)), 1.second)
+      assert(rep.statusCode == status.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.isEmpty)
+
+      client.close()
+      server.close()
+    }
+
+    Seq(Continue, SwitchingProtocols, Processing, NoContent, NotModified) foreach { s =>
+      checkWith(s)
+    }
+  }
+
+  test("204 gzip") {
+    import Status.{Continue, SwitchingProtocols, Processing, NoContent, NotModified}
+
+    def requestWithStatusAndAcceptEncoding(status: Status, acceptEncoding: String): Request =
+      Request(("statusCode", status.code.toString), (Fields.AcceptEncoding, acceptEncoding))
+
+    def checkWith(status: Status) = {
+      val service = new HttpService {
+        def apply(request: Request) = {
+          val statusCode = request.getIntParam("statusCode", Status.BadRequest.code)
+          val rep = Response(Status.fromCode(statusCode))
+          rep.contentString = "hello"
+          Future.value(rep)
+        }
+      }
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .withCompressionLevel(6)
+        .serve("localhost:*", service)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+
+      val rep = Await.result(client(requestWithStatusAndAcceptEncoding(status, "gzip")), 1.second)
+      assert(rep.statusCode == status.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.isEmpty)
+
+      client.close()
+      server.close()
+    }
+
+    Seq(Continue, SwitchingProtocols, Processing, NoContent, NotModified) foreach { s =>
+      checkWith(s)
     }
   }
 }

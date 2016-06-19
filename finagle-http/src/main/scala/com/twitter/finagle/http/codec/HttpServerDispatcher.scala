@@ -11,6 +11,7 @@ import com.twitter.io.{Reader, BufReader}
 import com.twitter.logging.Logger
 import com.twitter.util.{Future, Promise, Throwables}
 import java.net.InetSocketAddress
+import org.jboss.netty.buffer.ChannelBuffers
 import org.jboss.netty.handler.codec.frame.TooLongFrameException
 import org.jboss.netty.handler.codec.http.{HttpRequest, HttpResponse}
 
@@ -30,6 +31,16 @@ class HttpServerDispatcher(
   trans.onClose ensure {
     service.close()
   }
+
+  protected def mustNotIncludeContent(rep: Response): Boolean =
+    rep.status match {
+      case Statuses.CONTINUE | Statuses.SWITCHING_PROTOCOLS | Statuses.PROCESSING |
+           Statuses.NO_CONTENT |
+           Statuses.NOT_MODIFIED =>
+        true
+      case _ =>
+        false
+    }
 
   protected def dispatch(m: Any, eos: Promise[Unit]): Future[Response] = m match {
     case badReq: BadHttpRequest =>
@@ -81,7 +92,13 @@ class HttpServerDispatcher(
 
   protected def handle(rep: Response): Future[Unit] = {
     setKeepAlive(rep, !isClosing)
-    if (rep.isChunked) {
+    if (mustNotIncludeContent(rep)) {
+      rep.setContent(ChannelBuffers.EMPTY_BUFFER)
+      if (rep.contentLength.isDefined)
+        rep.headers.remove(Fields.ContentLength)
+
+      trans.write(rep)
+    } else if (rep.isChunked) {
       // We remove content length here in case the content is later
       // compressed. This is a pretty bad violation of modularity:
       // this is likely an issue with the Netty content

@@ -5,6 +5,7 @@ import com.twitter.finagle.http._
 import com.twitter.finagle.stats.{StatsReceiver, RollupStatsReceiver}
 import com.twitter.logging.Logger
 import com.twitter.util.{Future, Promise, Throwables}
+import org.jboss.netty.buffer.ChannelBuffers
 
 private[http] object HttpServerDispatcher {
   val handleHttp10: PartialFunction[Throwable, Response] = {
@@ -29,6 +30,16 @@ class HttpServerDispatcher(
   trans.onClose.ensure {
     service.close()
   }
+
+  protected def mustNotIncludeContent(rep: Response): Boolean =
+    rep.status match {
+      case Statuses.CONTINUE | Statuses.SWITCHING_PROTOCOLS | Statuses.PROCESSING |
+           Statuses.NO_CONTENT |
+           Statuses.NOT_MODIFIED =>
+        true
+      case _ =>
+        false
+    }
 
   protected def dispatch(m: Request): Future[Response] = m match {
     case badReq: BadReq =>
@@ -63,7 +74,13 @@ class HttpServerDispatcher(
 
   protected def handle(rep: Response): Future[Unit] = {
     setKeepAlive(rep, !isClosing)
-    if (rep.isChunked) {
+    if (mustNotIncludeContent(rep)) {
+      rep.setContent(ChannelBuffers.EMPTY_BUFFER)
+      if (rep.contentLength.isDefined)
+        rep.headerMap.remove(Fields.ContentLength)
+
+      trans.write(rep)
+    } else if (rep.isChunked) {
       // We remove content length here in case the content is later
       // compressed. This is a pretty bad violation of modularity;
       // this is likely an issue with the Netty content
