@@ -3,9 +3,9 @@ resolvers += "twitter-repo" at "https://maven.twttr.com"
 
 val branch = Process("git" :: "rev-parse" :: "--abbrev-ref" :: "HEAD" :: Nil).!!.trim
 val scroogeSbtPluginVersionPrefix = "4.7.0"
-val scroogeSbtPluginVersion =
-  if (branch == "master") scroogeSbtPluginVersionPrefix
-  else scroogeSbtPluginVersionPrefix + "-SNAPSHOT"
+val scroogeSbtPluginVersion = "4.7.0"
+//  if (branch == "master") scroogeSbtPluginVersionPrefix
+//  else scroogeSbtPluginVersionPrefix + "-SNAPSHOT"
 addSbtPlugin("com.twitter" % "scrooge-sbt-plugin" % scroogeSbtPluginVersion)
 
 addSbtPlugin("com.typesafe.sbt" % "sbt-site" % "0.8.1")
