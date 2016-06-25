@@ -8,19 +8,16 @@ import com.twitter.finagle.filter.PayloadSizeFilter
 import com.twitter.finagle.http._
 import com.twitter.finagle.http.codec.{HttpClientDispatcher, HttpServerDispatcher}
 import com.twitter.finagle.http.exp.StreamTransport
-import com.twitter.finagle.http.filter.{ClientContextFilter, HttpNackFilter,
-  ServerContextFilter}
-import com.twitter.finagle.http.netty.{Netty3ClientStreamTransport, Netty3ServerStreamTransport,
-  Netty3HttpTransporter, Netty3HttpListener}
+import com.twitter.finagle.http.filter.{ClientContextFilter, HttpNackFilter, ModifyContentAndHeaderFieldFilter, ServerContextFilter}
+import com.twitter.finagle.http.netty.{Netty3ClientStreamTransport, Netty3HttpListener, Netty3HttpTransporter, Netty3ServerStreamTransport}
 import com.twitter.finagle.netty3._
-import com.twitter.finagle.param.{Monitor => _, ResponseClassifier => _, ExceptionStatsHandler => _,
-  Tracer => _, _}
+import com.twitter.finagle.param.{ExceptionStatsHandler => _, Monitor => _, ResponseClassifier => _, Tracer => _, _}
 import com.twitter.finagle.server._
 import com.twitter.finagle.service.RetryBudget
 import com.twitter.finagle.stats.{ExceptionStatsHandler, StatsReceiver}
 import com.twitter.finagle.tracing._
 import com.twitter.finagle.transport.Transport
-import com.twitter.util.{Duration, Future, StorageUnit, Monitor}
+import com.twitter.util.{Duration, Future, Monitor, StorageUnit}
 import java.net.SocketAddress
 
 /**
@@ -292,6 +289,7 @@ object Http extends Client[Request, Response] with HttpRichClient
       StackServer.newStack
         .replace(TraceInitializerFilter.role, new HttpServerTraceInitializer[Request, Response])
         .replace(StackServer.Role.preparer, HttpNackFilter.module)
+        .prepend(ModifyContentAndHeaderFieldFilter.module)
         .prepend(nonChunkedPayloadSize)
         .prepend(ServerContextFilter.module)
   }

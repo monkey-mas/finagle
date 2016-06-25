@@ -3,7 +3,7 @@ package com.twitter.finagle.http.codec
 import com.twitter.finagle.Service
 import com.twitter.finagle.http._
 import com.twitter.finagle.http.exp.{GenSerialServerDispatcher, StreamTransport}
-import com.twitter.finagle.stats.{StatsReceiver, RollupStatsReceiver}
+import com.twitter.finagle.stats.{RollupStatsReceiver, StatsReceiver}
 import com.twitter.logging.Logger
 import com.twitter.util.{Future, Promise, Throwables}
 
@@ -29,6 +29,11 @@ private[finagle] class HttpServerDispatcher(
 
   trans.onClose.ensure {
     service.close()
+  }
+
+  private def mayHaveContent(status: Status): Boolean = status match {
+    case Status.NoContent | Status.NotModified => false
+    case _ => true
   }
 
   protected def dispatch(m: Request): Future[Response] = m match {
@@ -66,6 +71,7 @@ private[finagle] class HttpServerDispatcher(
 
   protected def handle(rep: Response): Future[Unit] = {
     setKeepAlive(rep, !isClosing)
+
     if (rep.isChunked) {
       // We remove content length here in case the content is later
       // compressed. This is a pretty bad violation of modularity;
@@ -93,7 +99,7 @@ private[finagle] class HttpServerDispatcher(
       p
     } else {
       // Ensure Content-Length is set if not chunked
-      if (!rep.contentLength.isDefined)
+      if (mayHaveContent(rep.status) && rep.contentLength.isEmpty)
         rep.contentLength = rep.content.length
 
       trans.write(rep)
