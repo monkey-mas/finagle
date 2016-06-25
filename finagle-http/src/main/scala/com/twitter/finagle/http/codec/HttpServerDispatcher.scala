@@ -3,9 +3,11 @@ package com.twitter.finagle.http.codec
 import com.twitter.finagle.Service
 import com.twitter.finagle.http._
 import com.twitter.finagle.http.exp.{GenSerialServerDispatcher, StreamTransport}
-import com.twitter.finagle.stats.{StatsReceiver, RollupStatsReceiver}
+import com.twitter.finagle.stats.{RollupStatsReceiver, StatsReceiver}
 import com.twitter.logging.Logger
 import com.twitter.util.{Future, Promise, Throwables}
+
+import org.jboss.netty.buffer.ChannelBuffers
 
 private[http] object HttpServerDispatcher {
   val handleHttp10: PartialFunction[Throwable, Response] = {
@@ -29,6 +31,11 @@ private[finagle] class HttpServerDispatcher(
 
   trans.onClose.ensure {
     service.close()
+  }
+
+  private def mustNotIncludeContent(status: Status): Boolean = status match {
+    case Status.NoContent | Status.NotModified => true
+    case _ => false
   }
 
   protected def dispatch(m: Request): Future[Response] = m match {
@@ -66,7 +73,19 @@ private[finagle] class HttpServerDispatcher(
 
   protected def handle(rep: Response): Future[Unit] = {
     setKeepAlive(rep, !isClosing)
-    if (rep.isChunked) {
+
+    if (mustNotIncludeContent(rep.status)) {
+        rep.setContent(ChannelBuffers.EMPTY_BUFFER)
+
+        if (rep.status == Status.NoContent)
+          rep.headerMap.remove(Fields.ContentLength)
+
+        // Make sure a Content-Length header field is set with a value of 0 if it is explicitly sent for a 304 response
+        if (rep.contentLength.isDefined)
+          rep.headerMap.set(Fields.ContentLength, "0")
+
+        trans.write(rep)
+      } else if (rep.isChunked) {
       // We remove content length here in case the content is later
       // compressed. This is a pretty bad violation of modularity;
       // this is likely an issue with the Netty content

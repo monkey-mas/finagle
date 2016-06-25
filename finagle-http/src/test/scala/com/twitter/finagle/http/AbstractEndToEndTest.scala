@@ -8,14 +8,17 @@ import com.twitter.finagle.builder.{ClientBuilder, ServerBuilder}
 import com.twitter.finagle.context.Contexts
 import com.twitter.finagle.http.service.HttpResponseClassifier
 import com.twitter.finagle.param.Stats
-import com.twitter.finagle.service.{ResponseClass, FailureAccrualFactory}
-import com.twitter.finagle.stats.{NullStatsReceiver, InMemoryStatsReceiver, StatsReceiver}
+import com.twitter.finagle.service.{FailureAccrualFactory, ResponseClass}
+import com.twitter.finagle.stats.{InMemoryStatsReceiver, NullStatsReceiver, StatsReceiver}
 import com.twitter.finagle.tracing.Trace
 import com.twitter.io.{Buf, Reader, Writer}
 import com.twitter.util.{Await, Closable, Future, JavaTimer, Promise, Return, Throw, Time}
 import java.io.{PrintWriter, StringWriter}
 import java.net.{InetAddress, InetSocketAddress}
+
+import org.jboss.netty.buffer.ChannelBuffers
 import org.scalatest.{BeforeAndAfter, FunSuite}
+
 import scala.language.reflectiveCalls
 
 abstract class AbstractEndToEndTest extends FunSuite with BeforeAndAfter {
@@ -31,6 +34,7 @@ abstract class AbstractEndToEndTest extends FunSuite with BeforeAndAfter {
   object MaxHeaderSize extends Feature
   object SetContentLength extends Feature
   object CompressedContent extends Feature
+  object NoContent extends Feature
 
   var saveBase: Dtab = Dtab.empty
   private val statsRecv: InMemoryStatsReceiver = new InMemoryStatsReceiver()
@@ -371,6 +375,158 @@ abstract class AbstractEndToEndTest extends FunSuite with BeforeAndAfter {
       assert(statsRecv.stat("server", "request_payload_bytes")() == Seq(10.0f))
       assert(statsRecv.stat("server", "response_payload_bytes")() == Seq(20.0f))
       client.close()
+    }
+
+    testIfImplemented(NoContent)(name + ": must not have a message body nor Content-Length when a 204 response is returned") {
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .serve("localhost:*", statusCodeSvc)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+      val rep = Await.result(client(requestWith(Status.NoContent)), 1.second)
+
+      assert(rep.statusCode == Status.NoContent.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.isEmpty)
+
+      client.close()
+      server.close()
+    }
+
+    testIfImplemented(NoContent)(name +
+      ": must not have a message body nor Content-Length when a 304 response is returned") {
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .serve("localhost:*", statusCodeSvc)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+      val rep = Await.result(client(requestWith(Status.NotModified)), 1.second)
+
+      assert(rep.statusCode == Status.NotModified.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.isEmpty)
+
+      client.close()
+      server.close()
+    }
+
+    testIfImplemented(NoContent)(name +
+      ": must not have a message body nor Content-Length when a 204 response with a non-empty body is returned") {
+      val service = new HttpService {
+        def apply(request: Request) = {
+          val statusCode = request.getIntParam("statusCode", Status.BadRequest.code)
+          val rep = Response(Status.fromCode(statusCode))
+          rep.contentString = "Hello, world!"
+          Future.value(rep)
+        }
+      }
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .serve("localhost:*", service)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+      val rep = Await.result(client(requestWith(Status.NoContent)), 1.second)
+
+      assert(rep.statusCode == Status.NoContent.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.isEmpty)
+
+      client.close()
+      server.close()
+    }
+
+    testIfImplemented(NoContent)(name +
+      ": must not have a message body nor Content-Length when a 304 response with a non-empty body is returned") {
+      val service = new HttpService {
+        def apply(request: Request) = {
+          val statusCode = request.getIntParam("statusCode", Status.BadRequest.code)
+          val rep = Response(Status.fromCode(statusCode))
+          rep.contentString = "Hello, world!"
+          Future.value(rep)
+        }
+      }
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .serve("localhost:*", service)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+      val rep = Await.result(client(requestWith(Status.NotModified)), 1.second)
+
+      assert(rep.statusCode == Status.NotModified.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.isEmpty)
+
+      client.close()
+      server.close()
+    }
+
+    testIfImplemented(NoContent)(name +
+      ": must not have a message body nor Content-Length when a 204 response with an explicit Content-Length header is returned") {
+      val service = new HttpService {
+        def apply(request: Request) = {
+          val statusCode = request.getIntParam("statusCode", Status.BadRequest.code)
+          val rep = Response(Status.fromCode(statusCode))
+          rep.headerMap.set(Fields.ContentLength, "100")
+          Future.value(rep)
+        }
+      }
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .serve("localhost:*", service)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+      val rep = Await.result(client(requestWith(Status.NoContent)), 1.second)
+
+      assert(rep.statusCode == Status.NoContent.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.isEmpty)
+
+      client.close()
+      server.close()
+    }
+
+    testIfImplemented(NoContent)(name +
+      ": must not have a message body but have a Content-Length with a value of 0" +
+      " when a 304 response with an explicit Content-Length header is returned") {
+      val service = new HttpService {
+        def apply(request: Request) = {
+          val statusCode = request.getIntParam("statusCode", Status.BadRequest.code)
+          val rep = Response(Status.fromCode(statusCode))
+          rep.headerMap.set(Fields.ContentLength, "100")
+          Future.value(rep)
+        }
+      }
+      val server = finagle.Http.server
+        .configured(param.Stats(NullStatsReceiver))
+        .serve("localhost:*", service)
+      val addr = server.boundAddress.asInstanceOf[InetSocketAddress]
+      val client = finagle.Http.client
+        .configured(param.Stats(statsRecv))
+        .newService("%s:%d".format(addr.getHostName, addr.getPort), "client")
+      val rep = Await.result(client(requestWith(Status.NotModified)), 1.second)
+
+      assert(rep.statusCode == Status.NotModified.code)
+      assert(!rep.httpMessage.isChunked)
+      assert(rep.httpMessage.getContent == ChannelBuffers.EMPTY_BUFFER)
+      assert(rep.contentLength.contains(0))
+
+      client.close()
+      server.close()
     }
   }
 

@@ -27,8 +27,9 @@ class EndToEndTest extends AbstractEndToEndTest {
     TooLongStream,
     SetContentLength,
     TooLongFixed,
-    CompressedContent // these tests pass but only because the server ignores
-                      // the compression param and doesn't compress content.
+    CompressedContent, // these tests pass but only because the server ignores
+                       // the compression param and doesn't compress content.
+    NoContent
   )
   def featureImplemented(feature: Feature): Boolean = !featuresToBeImplemented(feature)
 }
